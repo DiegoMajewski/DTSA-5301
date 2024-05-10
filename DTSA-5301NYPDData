@@ -1,0 +1,115 @@
+---
+title: "DTSA5301Week2Assignment"
+output:
+  pdf_document: default
+  html_document: default
+date: "2024-04-24"
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+library(formatR)
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=85), tidy=TRUE)
+```
+
+```{r setup2,echo=FALSE}
+# NYPD Shooting Data (Historic)
+library(tidyverse)
+library(forcats)
+library(plyr)
+library(dplyr)
+library(ggplot2)
+url_in <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+data <- read_csv(url_in)
+
+```
+# Step One: Cleaning the Data
+## Removed the following fields: 
+1.Incident Key - Not necessary to summarize data for reporting
+2.Loc_of_occur_desc - Only ~3000 records out of 28,500 are not null- none of them even use the NA value. Not very useful for analysis.
+3.Removed jurisdiction code because although it has almost no null values, its hard to tell what it means just from the data provided.
+4.Removed xy coordinate fields and joined lat long fields as it's kind of redundant when there is already lat and long fields
+
+## Now its time to change the column's datatypes.
+```{r analysis}
+
+filterdata <- data[-c(1,7,17,18,21)]
+
+filterdata[c("LOC_OF_OCCUR_DESC","LOC_CLASSFCTN_DESC","LOCATION_DESC","PERP_AGE_GROUP","PERP_SEX","PERP_RACE","VIC_AGE_GROUP","VIC_SEX","VIC_RACE")][is.na(filterdata[c("LOC_OF_OCCUR_DESC","LOC_CLASSFCTN_DESC","LOCATION_DESC","PERP_AGE_GROUP","PERP_SEX","PERP_RACE","VIC_AGE_GROUP","VIC_SEX","VIC_RACE")])] <-'UNKNOWN'
+filterdata[filterdata == '(null)'] <-"UNKNOWN"
+
+filterdata$OCCUR_DATE <- as.Date(filterdata$OCCUR_DATE, "%m/%d/%Y")
+filterdata
+```
+## These are all for testing unique values from the original data and their counts to decide what was worth keeping and what doesn't share much relevant information for the purposes of visualization
+```{r eval=FALSE}
+unique(data$LOC_OF_OCCUR_DESC)
+table(data$LOC_OF_OCCUR_DESC)
+unique(data$LOC_CLASSFCTN_DESC)
+table(data$LOC_CLASSFCTN_DESC)
+unique(data$JURISDICTION_CODE)
+sum(table(data$JURISDICTION_CODE))
+unique(data$PERP_AGE_GROUP)
+table(data$PERP_AGE_GROUP)
+unique(data$PERP_SEX)
+table(data$PERP_SEX)
+unique(data$LOCATION_DESC)
+table(data$LOCATION_DESC)
+sum(table(data$LOCATION_DESC))
+
+```
+## Lets try and see how murder vs non-murder reported shootings changes over time.
+### First we have to group our data.
+```{r}
+
+
+shootings2020 <- filterdata %>% filter(between(filterdata$OCCUR_DATE,as.Date('2020-01-01'),as.Date('2021-01-01')))
+#this will give us the format we need to create a visualization
+x<- count(tibble(shootings2020$STATISTICAL_MURDER_FLAG,shootings2020$OCCUR_DATE))
+
+
+#We can see that generally early 2020 was fairly low in both fatal and non-fatal shootings, but in late spring the number of non-fatal shootings spiked dramatically.
+#Murders went up as well, but less so.
+ggplot(x, aes(x$shootings2020.OCCUR_DATE,x$freq,colour=x$shootings2020.STATISTICAL_MURDER_FLAG))+geom_area()+labs(x="Date",y='Count',colour='Murder', title = "Fatal and Nonfatal Shootings in 2020")
+#Questions to ask regarding this:
+#What factors might have caused this spike in the Summer of 2020?
+#Why were the numbers so low in early 2020 compared to the rest of the year (I suspect Covid but we cant automatically assume this)
+
+```
+
+## I want to know how many perpetrators get identified vs not, with levels of identification. AKA - how many times does a perpetrator get fully ID'd (Race, sex, and age), partially Id'd, or not ID'd at all.
+### There is probably a more eloquent way of doing this, and this is really kind of slow but it does the trick. Now we can see all the possible combos of identifiable perpetrators.
+
+```{r}
+
+filterdata
+
+f <- filterdata %>% mutate(perptypes=case_when(filterdata$PERP_AGE_GROUP=="UNKNOWN" & filterdata$PERP_RACE=="UNKNOWN" & filterdata$PERP_SEX=="UNKNOWN" ~ "COMPLETELY UNKNOWN",
+                      filterdata$PERP_AGE_GROUP=="UNKNOWN" & filterdata$PERP_RACE=="UNKNOWN" & filterdata$PERP_SEX!="UNKNOWN" ~  "SEX KNOWN",
+                      filterdata$PERP_AGE_GROUP=="UNKNOWN" & filterdata$PERP_RACE!="UNKNOWN" & filterdata$PERP_SEX=="UNKNOWN" ~  "RACE KNOWN",
+                      filterdata$PERP_AGE_GROUP!="UNKNOWN" & filterdata$PERP_RACE=="UNKNOWN" & filterdata$PERP_SEX=="UNKNOWN" ~  "AGE GROUP KNOWN",
+                      filterdata$PERP_AGE_GROUP!="UNKNOWN" & filterdata$PERP_RACE!="UNKNOWN" & filterdata$PERP_SEX=="UNKNOWN" ~  "AGE GROUP AND RACE KNOWN",
+                      filterdata$PERP_AGE_GROUP=="UNKNOWN" & filterdata$PERP_RACE!="UNKNOWN" & filterdata$PERP_SEX!="UNKNOWN"~  "RACE AND SEX KNOWN",
+                      TRUE ~ 'FULLY IDENTIFIED'))
+unique(f$perptypes)
+table(f$perptypes)
+#by looking for unique and table we find something interesting - There has never been a situation in which A)Only Age Group Known B) Only Race Known C)Age Group and Race Known
+#Intuition tells us this makes sense - Its hard to only tell someone's gender without seeing their skin color, same with age group.
+#Also, if you can tell how old they are and their race, chances are their sex is easy to determine as well, hence it would fall under fully identified.
+#But! It's nice to have this laid out for certain. Have a plot!
+ggplot(f,aes(x=fct_infreq(perptypes)))+geom_bar()+labs(x="Perpetrator Identification Types")
+
+
+```
+
+Bias Identification:
+When working with data it is really important to make sure that in the pursuit of answering our questions, that we aren't trying to change the data in a way that fits any answer we might be trying to find.
+In the case of this police report on shootings there's a lot of factors that can affect data:
+
+1. Data collection - how many shootings go unreported? How do we know that the data reported is true? Are the police more or less likely to report and follow up on certain shootings depending on time, location, and the demographics of the perpetrator/victim. An example of personal bias here would be assuming that police would be more likely to report and investigate those of lower socioeconomic standing.
+
+2. Interpretation of Data: We have to be careful to avoid drawing conclusions based on conjecture. We only have data on shootings, not the ratio of shootings compared to the population of each boro, intent of the shooting, or any extra details or classifications.
+Essentially we have little to no details on intent in these shootings (e.g. homicide, suicide, accidental, mass, etc.) other than if the victim died or not.
+
+To mitigate my bias in regards to this I have avoided trying to find statistics that might be prone to such biases such as finding statistics of crime based on the race/sex of the perpetrator and victims.
+I instead focused on just numbers like the rates of fatal/nonfatal shootings over one year for my first visualization and the ways in which Perpetrators are most commonly identified by eyewitnesses.
